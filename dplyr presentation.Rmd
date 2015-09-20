@@ -1,0 +1,418 @@
+---
+title: "Dplyr Presentation"
+author: "Greg Gunn"
+date: "September 17, 2015"
+output: slidy_presentation
+---
+## Data Wrangling
+
+
+* If you are anything like me, you spend twice as much time formatting data, adding calculations, and doing other non-modeling and stats tasks than you do building the actual model.
+
+* There are several packages in R which can help with these tasks:
+    + Base R
+    + data.frame
+    + sqldf
+    + a bunch more I probably haven't used before
+
+### And.....
+
+
+## dplyr
+
+* dplyr is a powerful data wrangling tool developed by Hadley Wickham. 
+
+* It is one of several tools very useful tools in the "Hadleyverse"
+    + See this [link](https://barryrowlingson.github.io/hadleyverse/#1) for slides on several of his packages
+* It is also maintained by RStudio, who has a helpful set of cheatsheets
+    + [Here](http://www.rstudio.com/resources/cheatsheets)
+
+## Why dplyr?
+
+1. It is faster than all the ohter packages except data.table, and a few Base R fuctions
+     + Most of the code is actually written in C++
+     + [The LA data science team has actually done a good benchmark](http://datascience.la/dplyr-and-a-very-basic-benchmark/)
+2. It is significantly easier to read than data.table
+    + [Here is Hadley's take on it](http://stackoverflow.com/questions/21435339/data-table-vs-dplyr-can-one-do-something-well-the-other-cant-or-does-poorly/27840349#27840349) 
+     + This is especially true for people who aren't coders, but may know some SQL  
+     
+I decided to learn dplyr when sqldf crashed for the 20th time one day.  I have used it to wrangle data sets up to 7MM rows and 10+ gigs
+
+
+## How to get the data
+We will be use the baseball data set created by Sean Lehman
+We can download it from his website directly
+
+```{r DL Data, message=FALSE, warning=FALSE }
+#Create a temporary file placeholder, and download the csv directly
+temp = tempfile()
+
+download.file("http://seanlahman.com/files/database/lahman-csv_2015-01-24.zip", destfile = temp)
+
+
+```
+
+## Piping %>%
+Let's take a look at the pipe operator "%>%".dplyr makes heavy use of piping, which is enabled by the magrittr package. You can use it with nearly any function that has a "data =" or "x =" option
+
+F(g(x)) is equivalent to g(x) %>% F()  
+
+Using this you can make your code read top to bottom instead instead of inside out.
+
+As an example this:
+```{r Unzip, message=FALSE, warning=FALSE}
+
+
+Player_data = read.csv((unz(temp, "Master.csv")))
+
+```
+Is equivalent to this:
+
+```{r Piped Unzip, message=FALSE, warning=FALSE}
+library(dplyr)
+
+Player_data = unz(temp, "Master.csv")%>%
+  read.csv()
+```
+
+Repeat for other datasets used
+
+```{r Unzip other sets, message=FALSE, warning=FALSE}
+Batting_data = unz(temp, "Batting.csv")%>%
+  read.csv()
+
+Salary_data = unz(temp, "Salaries.csv")%>%
+  read.csv()
+
+#Delete the tempfile now that  your data frames are loaded into memory
+unlink(temp)
+
+```
+
+## What does our data look like?
+
+### Player Data
+
+```{r, , echo = FALSE,message = FALSE, warning = FALSE}
+library(DT)
+
+datatable(head(Player_data,10), options = list(pageLength = 5))
+
+```
+
+### Batting Data
+```{r, echo = FALSE,message = FALSE, warning = FALSE}
+
+datatable(head(Batting_data, 10), options = list(pageLength = 5))
+
+```
+
+### Salary Data
+```{r, echo = FALSE,message = FALSE, warning = FALSE}
+
+datatable(head(Salary_data,10), options = list(pageLength = 5))
+
+```
+
+
+## Tutorial
+
+I won't spend much time going over syntax in detail.  There are many videos for that, as well as the documentation.  Instead, I am going to ask a series of data wrangling quesitons, and show you how to use dplyr to answer them.  That should help show how to string dplyr commands together into a sensible flow using the 5 key verbs
+
+1. filter, equivalent to the SQL where clause
+2. mutate, add or changes columns
+3. group_by
+4. summarise or summarize
+5. arrange, which sorts the data 
+
+dplyr also comes with many handy helper functions.  You'll see examples of these along the way, along with examples of how to use the join functions.
+
+## Question 1
+
+###What are the top 10 base stealing season since 1950?
+```{r}
+
+Stolen_Base_Seasons = Batting_data%>%
+  filter(yearID>=1950)%>%
+  select(yearID, playerID, SB, CS)%>%
+  arrange(desc(SB))%>%
+  top_n(10, SB)
+
+```
+
+```{r, echo = FALSE,message = FALSE, warning = FALSE }
+datatable(Stolen_Base_Seasons)
+
+```
+
+ 
+## Question 2
+
+
+### Which player has the most stolen bases of All time?
+
+
+```{r}
+Career_Stolen_Bases = Batting_data%>%
+  group_by(playerID)%>%
+  summarise(Career_Stolen_Bases = sum(SB, na.rm = TRUE), 
+            Career_Caught_Stealing = sum(CS, na.rm=TRUE),
+            Seasons = n_distinct(yearID))%>%
+  arrange(desc(Career_Stolen_Bases))
+```
+
+```{r, echo = FALSE,message = FALSE, warning = FALSE}
+
+datatable( head(Career_Stolen_Bases, 50))
+
+```
+
+## Question 3
+
+### What are the top 10 Stolen Base leader's names and how tall are they?
+
+```{r}
+Enhanced_Career_SB = Career_Stolen_Bases%>%
+  top_n(10, Career_Stolen_Bases)%>%
+  left_join(y = Player_data, by = c("playerID" = "playerID"))%>%
+  mutate(Name = paste(nameLast, nameFirst, sep = ","), 
+         Height = paste(height%/%12, "'", height%%12, "\"", sep = ""))%>%
+  select(Name, Height, Seasons,
+         `Stolen Bases` = Career_Stolen_Bases, `Caught Stealing`=Career_Caught_Stealing)
+```
+
+```{r, echo = FALSE,message = FALSE, warning = FALSE}
+
+datatable( Enhanced_Career_SB)
+
+```
+
+## Question 4
+
+### What percentage of their team's runs did each player account for since 2008? RBi's
+
+The scales library houses some handy feature for formatting numbers to the appropriate text like the percent function shown below.
+
+```{r}
+library(scales)
+
+Team_Contribution = Batting_data%>%
+  filter(yearID == 2008)%>%
+  group_by(yearID, teamID, playerID)%>%
+  summarise(Runs = sum(R), 
+            RBI = sum(RBI))%>%
+  mutate(Team_Runs = sum(Runs), 
+         Team_RBIS = sum(RBI), 
+         Pct_of_Runs = Runs/Team_Runs, 
+         Pct_of_RBI = RBI/Team_RBIS)%>%
+  left_join(y = Player_data, by = c("playerID" = "playerID"))%>%
+  mutate(Name = paste(nameLast, nameFirst, sep = ","), 
+         Height = paste(height%/%12, "'", height%%12, "\"", sep = ""))%>%
+  select(Team = teamID, Name, `Percent of Team's Runs` = Pct_of_Runs,
+         `Percent of Team's RBIs` = Pct_of_RBI)%>%
+  ungroup()%>%
+  arrange(Team, desc(`Percent of Team's Runs`))%>%
+  mutate(`Percent of Team's Runs` = percent(`Percent of Team's Runs`), 
+         `Percent of Team's RBIs` = percent(`Percent of Team's RBIs`))
+```
+
+```{r, echo = FALSE,message = FALSE, warning = FALSE}
+
+datatable( head(Team_Contribution, 50), options = list(
+  columnDefs = list(list(className = 'dt-center', targets = 1:5))))
+
+```
+
+## Question 5
+
+### Can you make me a graph of HR by team since 1975?
+
+You can also use ggplots inline with your wrangling
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+
+HR_Time_Series = Batting_data%>%
+  filter(yearID>=1975)%>%
+  group_by(teamID, yearID)%>%
+  summarise(HR = sum(HR, na.rm = TRUE))%>%
+  ggplot()+
+  geom_line(aes(x = yearID, y = HR, color = teamID))+
+  theme_tufte()+
+  xlab("Year")
+
+HR_Time_Series
+
+```
+
+## Functions
+
+Now you might say "Greg, that is way too many lines, and Home Runs are a terrible measure. Show me the Rangers' and Astros' runs." Fair points.  So we'll need to construct a function to select the appropriate teams, as well as the correct measure.
+
+
+### Evaluations
+In order to write functions using dplyr code, you have to understand [Standard Evaluation vs. NSE (non-standard evaluation).](https://cran.r-project.org/web/packages/dplyr/vignettes/nse.html) Below is a short example, then I'll demonstrate the correct (or at least a way that works) method on our baseball data set.
+
+Here is what happens if you try to write the function as usual:
+
+```{r , error=TRUE}
+group_iris <- function(grp_column, avg_column,df=iris){
+  df2 <- df %>%
+    group_by(grp_column) %>%
+    summarise(count=sum(avg_column))
+  return(df2)
+}
+
+group_iris(grp_column = "Species", avg_column = "Sepal.Length")
+```
+
+Here is a working version:
+```{r}
+library(lazyeval)
+
+group_iris <- function(grp_column, avg_column,df=iris ){
+  df2 <- df %>%
+    group_by_(grp_column)%>%
+    summarise_(count= interp(~mean(col), col = as.name(avg_column)))
+  return(df2)
+}
+
+group_iris(grp_column = "Species", avg_column = "Sepal.Length")
+
+
+```
+
+There are a couple of key differences:
+
+ 1. Notice that each verb has and underscore at the end, so it's summarise_ instead of summarise.
+ 2. A little more obvious is the use of the interp function. Essentially you have use this combination to make sure R is looking for your column, instead of evaluating the string you provided.
+ 3. Notice the ~ in front of the mean function.  This is important to keep your environments straight.
+
+Again, if you're interested please read the link above.  It was **VERY** helpful for me.
+
+## A more complicated example
+
+Now that you we have that covered.  Let's get back to our baseball example:
+```{r}
+library(ggplot2)
+library(ggthemes)
+StatPlotter = function(teamlist, stat, Min_Year = 1950, Max_Year = 2014){
+ 
+   summary_stat = setNames(list(interp(~sum(var1, na.rm = TRUE), var1 = as.name(stat))), c(stat))
+  
+  filters = list(~teamID %in% teamlist,
+                 ~yearID >= Min_Year, 
+                 ~yearID <= Max_Year)
+  
+  Batting_data%>%
+    filter_(.dots = filters)%>%
+    group_by_(~teamID, ~yearID)%>%
+    summarise_(.dots = summary_stat)%>%
+    ggplot()+
+    geom_line(aes_string(x = "yearID", y = stat, color = "teamID"), stat = "identity")+
+   expand_limits(y = 0)+
+  theme_tufte() 
+  
+}
+
+
+StatPlotter(teamlist = c("TEX", "HOU"), stat = "R")
+
+
+```
+
+There are a couple of extra concepts in here:
+
+ 1. The setNames function
+    + This is used so that your output will have the correct name.  In this case showing "R" instead of a constant arbitrary name like "Stat"
+ 2. The .dots argument
+    + You'll need to use this if you want to change your output based on an argument.  Which we are doing because are changing the name of the output column.
+    
+## Interactive Graphs with HTML Widgets 
+
+Switching gears a bit, R also has great functionality as it pertains to interactive graphics.  It is surprisingly straight forward.  Using the package htmlwidgets and several helper packages you can make interactive graphs with just a few lines of code.  [Here is a good website for reference](http://www.htmlwidgets.org/)
+
+Here is an example using the metrics graphics package:
+
+```{r}
+library(htmlwidgets)
+library(metricsgraphics)
+
+Career_Stolen_Bases = Batting_data%>%
+  group_by(playerID)%>%
+  summarise(Career_Stolen_Bases = sum(SB, na.rm = TRUE), 
+            Career_Caught_Stealing = sum(CS, na.rm=TRUE),
+            Seasons = n_distinct(yearID))%>%
+  left_join(y = Player_data, by = c("playerID" = "playerID"))%>%
+  mutate(Name = paste(nameLast, nameFirst, sep = ", "), 
+         Height = paste(height%/%12, "'", height%%12, "\"", sep = ""))%>%
+  select(Name, Height, Seasons,
+         Career_Stolen_Bases, `Caught Stealing`=Career_Caught_Stealing)
+
+
+#This is all the code to generate the graphic
+mjs_plot(Career_Stolen_Bases, x=Seasons, y=Career_Stolen_Bases) %>%
+  mjs_point()%>%
+  mjs_labs(x="Seasons Played", y="Stolen Bases")%>%
+   mjs_add_mouseover("function(d, i) {
+                $('{{ID}} svg .mg-active-datapoint')
+                    .text (d.point.Name + '  Seasons Played:' + d.point.Seasons + ' Stolen Bases:' + d.point.Career_Stolen_Bases);
+  }")
+
+```
+
+## Time series graphs
+
+The package [dygraph package](https://rstudio.github.io/dygraphs/gallery-series-highlighting.html) produces some really good time series plots:
+
+```{r, warning=FALSE}
+
+
+library(dygraphs)
+library(xts)
+library(tidyr)
+
+Stolen_Base_TS= Batting_data %>%
+  filter(playerID %in% Stolen_Base_Seasons$playerID)%>%
+  group_by(yearID, playerID)%>%
+  summarise(Stolen_Bases = sum(SB, na.rm = TRUE))%>%
+  left_join(y = Player_data, by = c("playerID" = "playerID"))%>%
+  mutate(Name = paste(nameLast, nameFirst, sep = ", "), 
+         Year = as.Date(as.character(yearID), format = "%Y"))%>%
+  ungroup()%>%
+  select(Year, Name, Stolen_Bases)%>%
+  spread(key = Name, value = Stolen_Bases)
+
+
+SB_XTS = xts(Stolen_Base_TS, order.by = Stolen_Base_TS$Year)
+SB_XTS$Year = NULL
+
+dygraph(SB_XTS)%>%
+  dyRangeSelector()%>%
+  dyHighlight(highlightCircleSize = 5, 
+              highlightSeriesBackgroundAlpha = 0.2,
+              hideOnMouseOut = TRUE)
+```
+
+You'll notice here I made use of two addtional packages:
+ 
+ 1. [tidyr](http://blog.rstudio.org/2014/07/22/introducing-tidyr/) which is great for cleaning up data and stacking and unstacking data.  I would also encourage you to read Hadley's paper on [Tidy Data](http://vita.had.co.nz/papers/tidy-data.pdf).  It does a good job of classifying common data problems and offering solutions.
+ 2. xts, which stands for xstensible time series, is an extension of the zoo package and is necessary for dygraphs.  
+ 
+ 
+## Datatables
+
+You've already seen a few examples of data tables earlier.  They come from the package [DT](http://rstudio.github.io/DT/), and only take a couple lines to produce.
+
+```{r}
+
+datatable(head(Salary_data,10), options = list(pageLength = 5))
+
+```
+
+My only caution is not to try and produce a giant data table, as it can eat memory pretty quickly and produce some error messages  
+
+## Thanks 
+
+I appreciate you guys taking some time to listen to me. I had a fun time putting this together.  Please let me know if you have any questions now or in the future.
